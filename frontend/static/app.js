@@ -1,290 +1,517 @@
-// Tic-Tac-Toe SPA - Frontend Logic
+/**
+ * Tic-Tac-Toe SPA — client-side logic.
+ * Communicates with the FastAPI backend via REST API.
+ */
 
-const API_BASE = '';
+// ─── Constants ──────────────────────────────────────────────────────────────
+const API_BASE = window.location.origin;
+const TOKEN_KEY = 'ttt_access_token';
+
+// ─── State ──────────────────────────────────────────────────────────────────
 let currentGameId = null;
 
-// ─── Utility Functions ───────────────────────────────────────────────────────
-
-function showScreen(screenId) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(screenId).classList.add('active');
-}
-
-function showLoading(show = true) {
-    document.getElementById('loading').classList.toggle('hidden', !show);
-}
-
+// ─── Token helpers ──────────────────────────────────────────────────────────
 function getToken() {
-    return localStorage.getItem('token');
+  return localStorage.getItem(TOKEN_KEY);
 }
 
 function setToken(token) {
-    if (token) {
-        localStorage.setItem('token', token);
-    } else {
-        localStorage.removeItem('token');
-    }
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
-function getUser() {
-    const user = localStorage.getItem('user');
-    return user ? JSON.parse(user) : null;
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
 }
 
-function setUser(user) {
-    if (user) {
-        localStorage.setItem('user', JSON.stringify(user));
-    } else {
-        localStorage.removeItem('user');
-    }
+function isAuthenticated() {
+  return !!getToken();
 }
 
+// ─── API call wrapper ───────────────────────────────────────────────────────
 async function apiCall(url, options = {}) {
-    const token = getToken();
-    const headers = { ...options.headers };
+  const token = getToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
 
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE}${url}`, {
+    ...options,
+    headers,
+  });
+
+  // Handle 204 No Content
+  if (response.status === 204) {
+    return null;
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    data = { detail: 'Unexpected server response' };
+  }
+
+  if (!response.ok) {
+    const message = data.detail || `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return data;
+}
+
+// ─── Screen management ──────────────────────────────────────────────────────
+function showScreen(screenId) {
+  document.querySelectorAll('.screen').forEach((el) => {
+    el.classList.remove('active');
+  });
+  const screen = document.getElementById(screenId);
+  if (screen) {
+    screen.classList.add('active');
+  }
+}
+
+function showError(elementId, message) {
+  const el = document.getElementById(elementId);
+  if (el) {
+    el.textContent = message;
+  }
+}
+
+function clearError(elementId) {
+  const el = document.getElementById(elementId);
+  if (el) {
+    el.textContent = '';
+  }
+}
+
+// ─── Win line patterns ──────────────────────────────────────────────────────
+const WIN_LINES = [
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8], // rows
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8], // columns
+  [0, 4, 8],
+  [2, 4, 6], // diagonals
+];
+
+function getWinLine(board) {
+  for (const line of WIN_LINES) {
+    const [a, b, c] = line;
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return line;
     }
+  }
+  return null;
+}
 
-    if (options.body && !(options.body instanceof FormData)) {
-        headers['Content-Type'] = 'application/json';
-    }
+// ─── Login ──────────────────────────────────────────────────────────────────
+async function handleLogin(event) {
+  event.preventDefault();
+  clearError('login-error');
 
-    const response = await fetch(`${API_BASE}${url}`, {
-        ...options,
-        headers,
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+
+  if (!username || !password) {
+    showError('login-error', 'Заполните все поля');
+    return;
+  }
+
+  try {
+    const data = await apiCall('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-        throw new Error(data.detail || `HTTP ${response.status}`);
-    }
-
-    return data;
+    setToken(data.access_token);
+    await loadDashboard();
+  } catch (err) {
+    showError('login-error', err.message);
+  }
 }
 
-// ─── Authentication ──────────────────────────────────────────────────────────
+// ─── Register ───────────────────────────────────────────────────────────────
+async function handleRegister(event) {
+  event.preventDefault();
+  clearError('register-error');
 
-async function handleLogin(username, password) {
-    showLoading(true);
-    try {
-        const data = await apiCall('/api/login', {
-            method: 'POST',
-            body: JSON.stringify({ username, password }),
-        });
-        setToken(data.access_token);
-        setUser(data.user);
-        await loadDashboard();
-    } catch (err) {
-        alert('Login failed: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
+  const username = document.getElementById('register-username').value.trim();
+  const password = document.getElementById('register-password').value;
+  const confirm = document.getElementById('register-confirm').value;
+
+  if (!username || !password || !confirm) {
+    showError('register-error', 'Заполните все поля');
+    return;
+  }
+
+  if (password !== confirm) {
+    showError('register-error', 'Пароли не совпадают');
+    return;
+  }
+
+  if (password.length < 4) {
+    showError('register-error', 'Пароль должен быть не менее 4 символов');
+    return;
+  }
+
+  try {
+    await apiCall('/api/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+
+    // Auto-login after registration
+    const loginData = await apiCall('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+
+    setToken(loginData.access_token);
+    await loadDashboard();
+  } catch (err) {
+    showError('register-error', err.message);
+  }
 }
 
-async function handleRegister(username, password) {
-    showLoading(true);
-    try {
-        await apiCall('/api/register', {
-            method: 'POST',
-            body: JSON.stringify({ username, password }),
-        });
-        // Auto-login after registration
-        await handleLogin(username, password);
-    } catch (err) {
-        alert('Registration failed: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
-}
-
-function handleLogout() {
-    setToken(null);
-    setUser(null);
-    showScreen('screen-login');
-}
-
-// ─── Dashboard ───────────────────────────────────────────────────────────────
-
+// ─── Dashboard ──────────────────────────────────────────────────────────────
 async function loadDashboard() {
-    const user = getUser();
-    if (!user) {
-        showScreen('screen-login');
-        return;
-    }
+  showScreen('screen-dashboard');
 
-    document.getElementById('user-greeting').textContent = user.username;
-    showLoading(true);
+  // Show username
+  try {
+    const me = await apiCall('/api/me');
+    document.getElementById('username-display').textContent = me.username;
+  } catch (err) {
+    // If token is invalid, redirect to login
+    logout();
+    return;
+  }
 
-    try {
-        const games = await apiCall('/api/games');
-        renderHistory(games);
-        showScreen('screen-dashboard');
-    } catch (err) {
-        alert('Failed to load games: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
+  // Load game history
+  await loadGameHistory();
 }
 
-function renderHistory(games) {
-    const container = document.getElementById('game-history');
+async function loadGameHistory() {
+  const loadingEl = document.getElementById('history-loading');
+  const emptyEl = document.getElementById('history-empty');
+  const errorEl = document.getElementById('history-error');
+  const tableWrapper = document.getElementById('history-table-wrapper');
+  const tbody = document.getElementById('history-body');
+
+  // Show loading
+  loadingEl.style.display = 'block';
+  emptyEl.style.display = 'none';
+  errorEl.textContent = '';
+  tableWrapper.style.display = 'none';
+
+  try {
+    const games = await apiCall('/api/games');
+
+    loadingEl.style.display = 'none';
 
     if (!games || games.length === 0) {
-        container.innerHTML = '<p>No games played yet.</p>';
-        return;
+      emptyEl.style.display = 'block';
+      return;
     }
 
-    let html = '<table><thead><tr><th>#</th><th>Result</th><th>Opponent</th><th>Date</th></tr></thead><tbody>';
-    games.forEach(game => {
-        const resultClass = game.result ? `result-${game.result}` : '';
-        const resultText = game.result ? game.result.charAt(0).toUpperCase() + game.result.slice(1) : 'In progress';
-        html += `<tr>
-            <td>${game.id}</td>
-            <td class="${resultClass}">${resultText}</td>
-            <td>${game.opponent}</td>
-            <td>${new Date(game.created_at).toLocaleDateString()}</td>
-        </tr>`;
+    tableWrapper.style.display = 'block';
+    tbody.innerHTML = '';
+
+    games.forEach((game) => {
+      const tr = document.createElement('tr');
+
+      // Date
+      const tdDate = document.createElement('td');
+      tdDate.textContent = formatDate(game.created_at);
+      tr.appendChild(tdDate);
+
+      // Opponent
+      const tdOpponent = document.createElement('td');
+      tdOpponent.textContent = game.opponent || 'Компьютер';
+      tr.appendChild(tdOpponent);
+
+      // Result
+      const tdResult = document.createElement('td');
+      tdResult.textContent = formatResult(game.result, game.status);
+      tdResult.className = getResultClass(game.result);
+      tr.appendChild(tdResult);
+
+      tbody.appendChild(tr);
     });
-    html += '</tbody></table>';
-    container.innerHTML = html;
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    showError('history-error', 'Не удалось загрузить историю игр: ' + err.message);
+  }
 }
 
-// ─── Game ────────────────────────────────────────────────────────────────────
-
-async function startNewGame() {
-    showLoading(true);
-    try {
-        const game = await apiCall('/api/games', { method: 'POST' });
-        currentGameId = game.id;
-        renderBoard(game);
-        showScreen('screen-game');
-    } catch (err) {
-        alert('Failed to create game: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (e) {
+    return dateStr;
+  }
 }
 
+function formatResult(result, status) {
+  if (status !== 'finished') return 'В процессе';
+  switch (result) {
+    case 'win':
+      return 'Победа';
+    case 'lose':
+      return 'Поражение';
+    case 'draw':
+      return 'Ничья';
+    default:
+      return '—';
+  }
+}
+
+function getResultClass(result) {
+  switch (result) {
+    case 'win':
+      return 'result-win';
+    case 'lose':
+      return 'result-lose';
+    case 'draw':
+      return 'result-draw';
+    default:
+      return 'result-unknown';
+  }
+}
+
+// ─── New Game ───────────────────────────────────────────────────────────────
+async function createNewGame() {
+  try {
+    const game = await apiCall('/api/games', {
+      method: 'POST',
+    });
+
+    currentGameId = game.id;
+    await loadGame(game.id);
+  } catch (err) {
+    showError('history-error', 'Не удалось создать игру: ' + err.message);
+  }
+}
+
+// ─── Game Screen ────────────────────────────────────────────────────────────
 async function loadGame(gameId) {
-    showLoading(true);
-    try {
-        const game = await apiCall(`/api/games/${gameId}`);
-        currentGameId = game.id;
-        renderBoard(game);
-        showScreen('screen-game');
-    } catch (err) {
-        alert('Failed to load game: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
+  showScreen('screen-game');
+  const loadingEl = document.getElementById('game-loading');
+  const errorEl = document.getElementById('game-error');
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('game-status');
+  const resultEl = document.getElementById('game-result');
+
+  loadingEl.style.display = 'block';
+  errorEl.textContent = '';
+  boardEl.style.display = 'none';
+  resultEl.textContent = '';
+  resultEl.className = 'game-result';
+
+  try {
+    const game = await apiCall(`/api/games/${gameId}`);
+    loadingEl.style.display = 'none';
+    boardEl.style.display = 'grid';
+    renderBoard(game);
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    showError('game-error', 'Не удалось загрузить игру: ' + err.message);
+  }
 }
 
 function renderBoard(game) {
-    const cells = document.querySelectorAll('.cell');
-    cells.forEach((cell, index) => {
-        const mark = game.board[index];
-        cell.textContent = mark;
-        cell.className = 'cell';
-        if (mark === 'X') cell.classList.add('x');
-        if (mark === 'O') cell.classList.add('o');
+  const board = game.board;
+  const cells = document.querySelectorAll('.cell');
+  const statusEl = document.getElementById('game-status');
+  const resultEl = document.getElementById('game-result');
+
+  // Reset board state
+  resultEl.textContent = '';
+  resultEl.className = 'game-result';
+
+  // Update cells
+  cells.forEach((cell, index) => {
+    const value = board[index];
+    cell.textContent = value || '';
+    cell.className = 'cell';
+    if (value === 'X') {
+      cell.classList.add('x');
+    } else if (value === 'O') {
+      cell.classList.add('o');
+    }
+  });
+
+  // Check for a winner
+  const winLine = getWinLine(board);
+  const isFinished = game.status === 'finished';
+
+  if (winLine) {
+    // Highlight winning cells
+    winLine.forEach((index) => {
+      cells[index].classList.add('win-cell');
     });
+  }
 
-    const statusEl = document.getElementById('game-status');
-    if (game.status === 'finished') {
-        if (game.winner === 'X') {
-            statusEl.textContent = 'You win! 🎉';
-        } else if (game.winner === 'O') {
-            statusEl.textContent = 'Computer wins!';
-        } else if (game.winner === 'draw') {
-            statusEl.textContent = "It's a draw!";
-        } else {
-            statusEl.textContent = 'Game finished';
-        }
+  // Show result if game is finished
+  if (isFinished) {
+    if (game.winner === 'X') {
+      resultEl.textContent = '🎉 Вы победили!';
+      resultEl.className = 'game-result result-win';
+      statusEl.textContent = 'Игра завершена';
+    } else if (game.winner === 'O') {
+      resultEl.textContent = '😞 Вы проиграли!';
+      resultEl.className = 'game-result result-lose';
+      statusEl.textContent = 'Игра завершена';
+    } else if (game.winner === 'draw') {
+      resultEl.textContent = '🤝 Ничья!';
+      resultEl.className = 'game-result result-draw';
+      statusEl.textContent = 'Игра завершена';
     } else {
-        statusEl.textContent = game.current_turn === 'X' ? 'Your turn (X)' : "Computer's turn (O)...";
+      statusEl.textContent = 'Игра завершена';
     }
-}
 
-async function handleCellClick(index) {
-    if (!currentGameId) return;
-
-    // Check if cell is already occupied
-    const cell = document.querySelector(`.cell[data-index="${index}"]`);
-    if (cell.textContent) return;
-
-    // Check if game is still in progress by getting current state
-    showLoading(true);
-    try {
-        const game = await apiCall(`/api/games/${currentGameId}/move`, {
-            method: 'POST',
-            body: JSON.stringify({ position: index }),
-        });
-        renderBoard(game);
-    } catch (err) {
-        alert('Move failed: ' + err.message);
-    } finally {
-        showLoading(false);
-    }
-}
-
-function backToDashboard() {
+    // Disable all cells
+    cells.forEach((cell) => cell.classList.add('disabled'));
     currentGameId = null;
-    loadDashboard();
+  } else {
+    // Game is in progress
+    const turnLabel = game.current_turn === 'X' ? 'Ваш ход (X)' : 'Ход компьютера (O)';
+    statusEl.textContent = turnLabel;
+
+    if (game.current_turn === 'O') {
+      // Computer's turn — disable cells and wait
+      cells.forEach((cell) => cell.classList.add('disabled'));
+    } else {
+      // Player's turn — enable only empty cells
+      cells.forEach((cell, index) => {
+        if (!board[index]) {
+          cell.classList.remove('disabled');
+        } else {
+          cell.classList.add('disabled');
+        }
+      });
+    }
+  }
 }
 
-// ─── Event Listeners ────────────────────────────────────────────────────────
+// ─── Make a move ────────────────────────────────────────────────────────────
+async function handleCellClick(event) {
+  const cell = event.currentTarget;
+  const index = parseInt(cell.dataset.index, 10);
 
-document.addEventListener('DOMContentLoaded', () => {
-    // Login form
-    document.getElementById('form-login').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const username = document.getElementById('login-username').value;
-        const password = document.getElementById('login-password').value;
-        handleLogin(username, password);
+  // Guard: don't allow moves on occupied or disabled cells
+  if (cell.textContent || cell.classList.contains('disabled')) {
+    return;
+  }
+
+  if (!currentGameId) {
+    return;
+  }
+
+  // Optimistically mark the cell
+  cell.textContent = 'X';
+  cell.classList.add('x', 'disabled');
+
+  const statusEl = document.getElementById('game-status');
+  statusEl.textContent = 'Ход компьютера (O)...';
+
+  try {
+    const game = await apiCall(`/api/games/${currentGameId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ position: index }),
     });
 
-    // Register form
-    document.getElementById('form-register').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const username = document.getElementById('register-username').value;
-        const password = document.getElementById('register-password').value;
-        const confirm = document.getElementById('register-confirm').value;
-        if (password !== confirm) {
-            alert('Passwords do not match');
-            return;
-        }
-        handleRegister(username, password);
-    });
+    renderBoard(game);
+  } catch (err) {
+    // Revert the optimistic update on error
+    cell.textContent = '';
+    cell.classList.remove('x', 'disabled');
+    showError('game-error', err.message);
+  }
+}
 
-    // Navigation links
-    document.getElementById('link-to-register').addEventListener('click', () => {
-        showScreen('screen-register');
-    });
+// ─── Logout ─────────────────────────────────────────────────────────────────
+function logout() {
+  clearToken();
+  currentGameId = null;
+  showScreen('screen-login');
+  document.getElementById('form-login').reset();
+  clearError('login-error');
+  clearError('register-error');
+  clearError('game-error');
+}
 
-    document.getElementById('link-to-login').addEventListener('click', () => {
-        showScreen('screen-login');
-    });
+// ─── Navigation ─────────────────────────────────────────────────────────────
+function goToRegister() {
+  clearError('login-error');
+  document.getElementById('form-login').reset();
+  showScreen('screen-register');
+}
 
-    // Dashboard buttons
-    document.getElementById('btn-new-game').addEventListener('click', startNewGame);
-    document.getElementById('btn-logout').addEventListener('click', handleLogout);
-    document.getElementById('btn-back').addEventListener('click', backToDashboard);
+function goToLogin() {
+  clearError('register-error');
+  document.getElementById('form-register').reset();
+  showScreen('screen-login');
+}
 
-    // Board cells
-    document.querySelectorAll('.cell').forEach(cell => {
-        cell.addEventListener('click', () => {
-            const index = parseInt(cell.dataset.index);
-            handleCellClick(index);
-        });
-    });
+function goBackToDashboard() {
+  clearError('game-error');
+  currentGameId = null;
+  loadDashboard();
+}
 
-    // Check if already logged in
-    if (getToken()) {
-        loadDashboard();
-    } else {
-        showScreen('screen-login');
-    }
-});
+// ─── Initialization ─────────────────────────────────────────────────────────
+function init() {
+  // ── Login form ──
+  document.getElementById('form-login').addEventListener('submit', handleLogin);
+  document.getElementById('link-to-register').addEventListener('click', (e) => {
+    e.preventDefault();
+    goToRegister();
+  });
+
+  // ── Register form ──
+  document.getElementById('form-register').addEventListener('submit', handleRegister);
+  document.getElementById('link-to-login').addEventListener('click', (e) => {
+    e.preventDefault();
+    goToLogin();
+  });
+
+  // ── Dashboard ──
+  document.getElementById('btn-new-game').addEventListener('click', createNewGame);
+  document.getElementById('btn-logout').addEventListener('click', logout);
+
+  // ── Game screen ──
+  document.getElementById('btn-back').addEventListener('click', goBackToDashboard);
+  document.querySelectorAll('.cell').forEach((cell) => {
+    cell.addEventListener('click', handleCellClick);
+  });
+
+  // ── Initial screen ──
+  if (isAuthenticated()) {
+    loadDashboard();
+  } else {
+    showScreen('screen-login');
+  }
+}
+
+// Start the app once DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
