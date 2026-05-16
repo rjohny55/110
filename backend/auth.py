@@ -1,10 +1,12 @@
+import os
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-SECRET_KEY = "super-secret-key-dev-110"
+# Use environment variable in production; fallback for local development only
+SECRET_KEY = os.environ.get("SECRET_KEY", "super-secret-key-dev-110")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
