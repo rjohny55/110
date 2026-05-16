@@ -616,6 +616,86 @@ class TestEdgeCases:
         assert get_result_for_player(in_progress, 1, 1) is None
 
 
+# ─── SECRET_KEY Configuration Tests ────────────────────────────────────────────
+
+
+class TestSecretKeyConfig:
+    """Tests for the SECRET_KEY environment variable configuration."""
+
+    def test_default_secret_key_when_env_not_set(self, monkeypatch):
+        """
+        When SECRET_KEY env var is not set, the default key should be used.
+        """
+        # Remove SECRET_KEY from env if present
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        import importlib
+        import backend.auth
+        importlib.reload(backend.auth)
+        assert backend.auth.SECRET_KEY == "super-secret-key-dev-110"
+
+    def test_env_secret_key_used_when_set(self, monkeypatch):
+        """
+        When SECRET_KEY env var is set, it should be used instead of default.
+        """
+        monkeypatch.setenv("SECRET_KEY", "my-custom-secret-key-for-testing-12345")
+        import importlib
+        import backend.auth
+        importlib.reload(backend.auth)
+        assert backend.auth.SECRET_KEY == "my-custom-secret-key-for-testing-12345"
+
+    def test_token_created_with_env_key_can_be_verified(self, monkeypatch):
+        """
+        Tokens created with the env-var-derived SECRET_KEY should
+        be verifiable using the same key.
+        """
+        monkeypatch.setenv("SECRET_KEY", "my-custom-secret-key-for-testing-12345")
+        import importlib
+        import backend.auth
+        importlib.reload(backend.auth)
+
+        token = backend.auth.create_access_token(42, "envuser")
+        payload = backend.auth.decode_access_token(token)
+        assert payload["sub"] == "42"
+        assert payload["username"] == "envuser"
+
+    def test_token_created_with_env_key_accepted_by_api(self, monkeypatch):
+        """
+        A token created with the env-var-derived SECRET_KEY
+        should be accepted by the /api/me endpoint.
+        """
+        # Register a user first (uses default DB, which is fine)
+        client.post("/api/register", json={"username": "envuser", "password": "test1234"})
+
+        monkeypatch.setenv("SECRET_KEY", "my-custom-secret-key-for-testing-12345")
+        import importlib
+        import backend.auth
+        importlib.reload(backend.auth)
+
+        # Create a token using the env-derived key
+        token = backend.auth.create_access_token(1, "envuser")
+        resp = client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+        # Token is valid — request should succeed
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "envuser"
+
+    def test_default_key_still_works_after_reload(self, monkeypatch):
+        """
+        After reloading with the env var, clearing the env var and
+        reloading should restore the default key.
+        """
+        # First set and reload
+        monkeypatch.setenv("SECRET_KEY", "custom-key")
+        import importlib
+        import backend.auth
+        importlib.reload(backend.auth)
+        assert backend.auth.SECRET_KEY == "custom-key"
+
+        # Now clear and reload
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        importlib.reload(backend.auth)
+        assert backend.auth.SECRET_KEY == "super-secret-key-dev-110"
+
+
 # ─── Token Edge Cases ─────────────────────────────────────────────────────────
 
 
